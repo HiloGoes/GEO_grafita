@@ -18,87 +18,109 @@ crs = "+proj=utm +zone=23 +south +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
 dados = gpd(dados, geometry='geometry',crs=crs)
 
 ####  bounds
-region = dados[vd.inside((dados.UTME, dados.UTMN), region= [290000, 345000,7455000, 7510000])]
-coordinates = (region.UTME.values, region.UTMN.values)
+dados = dados[vd.inside((dados.UTME, dados.UTMN), region=[290000, 345000,7455000, 7510000])]
+coordinates = (dados.UTME.values, dados.UTMN.values)
 
-def timelapse(inicio):
-	timelapse=str(time.process_time()-inicio)
-	print("tempo decorrido:"+timelapse+"s")
+
+
+
+### Counter
+def timelapse(begin,str_process="@@"):
+	timelapse=np.floor(process_time()-begin) #transform to int
+	Min_timelapse="00"#configuring as default value
+	if timelapse>=60:
+		Min_timelapse=timelapse/60
+		timelapse=timelapse%60
+		print(str_process+" timelapse: "+str(Min_timelapse)+":"+str(timelapse))
 
 ####  Chanining configuration
-def chain_config(spacing=1000):
-	print("chain_config begin")
-	chain = vd.Chain([
-		('trend',  vd.Trend(degree=2)),
+def chain_config(spacing=2500,degree=7):#degree>20 is useless ##operations with 2 degree polynomium can go downwards or upwards very fast
+    begin=process_time()
+    print("chain_config begin")
+    chain = vd.Chain([
+		('trend',  vd.Trend(degree=degree)),
 		('reduce', vd.BlockReduce(np.median, spacing=spacing)),
 		('spline', vd.Spline()),
 		])
-	print("chain_config end")
-	timelapse(inicio)
-	return chain
+    timelapse(begin,"chain_config")
+    return chain
 
-chain=chain_config()
-#### Then we fit within the chain
-def chaining(row=1,max_distance=1000):
-	inicio=time.process_time()
-	print("chaining begin")
-	chain.fit(coordinates, region[row])
-	grid = chain.grid(spacing=200, data_names=[row])
+def fitting():#for each feature
+	begin=process_time()
+	print(feature+' chain fit begin')
+	chain.fit(coordinates, dados[feature])
+	timelapse(begin,"chain fit")
+
+#### Plot grid
+def griding(max_distance=500,cell_size=500):
+	begin=process_time()
+	print(feature+'chaining begin')
+	grid = chain.grid(spacing=cell_size, data_names=[feature])
 	grid = vd.distance_mask(coordinates, maxdist=max_distance, grid=grid)
-
-	grid[row].to_netcdf(row+'.nc')
-	grid[row].plot(figsize=(8,8), cmap='magma')
+	grid[feature].to_netcdf('~/graphite_git/resources/tif/verde/'+feature+'_'+max_distance+'_'+cell_size+'.nc')
+	grid[feature].plot(figsize=(8,8), cmap='magma')
 	plt.axis('scaled')
-	print("chaining end")
-	timelapse(inicio)
+	timelapse(begin,"griding")
+	return grid
 	
+	
+
 #### Model Validation
-def validation(row,test_size=0.1,spacing=500):
-	inicio=time.process_time()
+def validation(sample_block_size = 500,test_size=0.1):
+	begin=process_time()
 	print("model validation begin")
-	train, test = vd.train_test_split(coordinates, region[row], test_size=test_size, spacing=spacing)
+	train, test = vd.train_test_split(coordinates, dados[feature], test_size=test_size, spacing=sample_block_size)
 	chain.fit(*train)
 	score=chain.score(*test)
-	print(score) #treino ? teste? #verde
-	print("model validation end")
-	timelapse(inicio)
+	print(score)
+	timelapse(begin,"model validation")
 	return score
 
 
 ####  Cross-Validation
-def cross_validation(row):
-	inicio=time.process_time()
+def cross_validation():
+	begin=process_time()
 	print("cross validation begin")
-	cv = vd.BlockKFold(spacing=200,n_splits=10,shuffle=True)
-	scores = vd.cross_val_score(chain,coordinates,region[row],cv=cv)
+	cv = vd.BlockKFold(spacing=100,n_splits=10,shuffle=True)
+	scores = vd.cross_val_score(chain,coordinates,dados[feature],cv=cv)
 	plt.figure()
 	plt.hist(scores, bins ='auto')
-	print(scores)
 	print("cross validation end")
-	timelapse(inicio)
+	timelapse(begin)
+	return scores
+
+#pop from
+def throw_chaining(spacing):
+	begin=process_time()
+	print("@@@throw_chaining_process begin")
+	for x in spacing:
+		fitting()
+		if validation(feature)<success_rate:
+			print("	...throwing chaining")
+		else:
+			print("good result!")
+			chain=chain_config(x)
+			grid[feature].to_netcdf(feature+str(process_time())+'.nc')#just check-it for tests
+			break
+	timelapse(begin,"@@@end throw_chaining")
+	return chain
 
 
-def process(tolerance=0.75):
-	print("process begin")
-	inicio=time.process_time()
-	np.linspace(start=500, stop=1000, num=10)
+### GLOBALS
+feature='@@'
+chain=chain_config() #computacional throw effort, at check human default values
+success_rate=0.75
+grid_results={}
 
+print("##process begin")
+begin=process_time()
+spacing=np.linspace(start=500, stop=1000, num=10)[::-1]
 
-	for row in grid_parameters:
-		chaining(row)
-		#if(>30%)
-		validation(row)
-		cross_validation(row)
-
-
-	timelapse(inicio)
-		#inserir flag de tempo
-	
-	#if error >95% continue
-
-process()
-
-'''
-for params in other_parameters:
-	np.arange(0,top+1,spacing)
-'''
+for params in grid_parameters:
+	feature=params
+	throw_chaining(spacing)
+	validation(params)
+	cross_validation(params)
+	grid_results[feature]=griding()
+	break
+timelapse(begin,"##end process")
